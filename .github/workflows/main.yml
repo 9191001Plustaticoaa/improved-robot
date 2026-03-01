@@ -1,4 +1,4 @@
-name: VPS Profesional Permanente
+name: VPS PROFESIONAL CLOUDFLARE LOOP
 
 on:
   workflow_dispatch:
@@ -9,44 +9,41 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: "1. Iniciar Webtop (14GB RAM)"
+      - name: "1. Preparar Webtop (14GB RAM)"
         run: |
           docker run -d -p 3000:3000 --name=webtop --security-opt seccomp=unconfined \
           -e PUID=1000 -e PGID=1000 -e TZ=America/Caracas --memory="14g" --shm-size="4gb" \
           lscr.io/linuxserver/webtop:ubuntu-xfce
-          echo "Webtop arrancando..."
+          echo "Webtop iniciando..."
           sleep 10
 
-      - name: "2. Tunel + Actualizar Cloudflare (Fix 1034)"
+      - name: "2. Iniciar Túnel y Actualizar Redirección"
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
           MY_DOMAIN: "Webtopt.qzz.io"
         run: |
-          # 1. Iniciar túnel con Pinggy
-          ssh -o StrictHostKeyChecking=no -R 80:localhost:3000 a.pinggy.io > tunnel.log 2>&1 &
+          # 1. Instalar Cloudflared
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+          # 2. Iniciar túnel aleatorio y guardar log
+          cloudflared tunnel --url http://localhost:3000 > tunnel.log 2>&1 &
           
-          echo "Esperando enlace del túnel..."
-          sleep 25 # Damos un poco más de tiempo
+          echo "Generando túnel de Cloudflare..."
+          sleep 20
           
-          # 2. Extraer el link generado
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9.-]+\.pinggy\.link" tunnel.log | head -n 1)
-          
-          if [ -z "$TUNNEL_URL" ]; then
-             echo "❌ Error al obtener el link. Reintentando..."
-             sleep 10
-             TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9.-]+\.pinggy\.link" tunnel.log | head -n 1)
-          fi
+          # 3. Extraer la URL de trycloudflare.com
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9.-]+\.trycloudflare\.com" tunnel.log | head -n 1)
 
           if [ -z "$TUNNEL_URL" ]; then
-             echo "❌ No se pudo conectar al túnel."
-             cat tunnel.log
-             exit 1
+            echo "❌ No se pudo obtener la URL de Cloudflare."
+            cat tunnel.log
+            exit 1
           fi
+          echo "✅ Túnel detectado: $TUNNEL_URL"
 
-          echo "✅ Link generado: $TUNNEL_URL"
-
-          # 3. Buscar el ID de la Page Rule en Cloudflare
+          # 4. Buscar el ID de la Page Rule en tu cuenta
           RULE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
@@ -57,7 +54,7 @@ jobs:
             exit 1
           fi
 
-          # 4. Actualizar la redirección (Page Rule)
+          # 5. Actualizar la redirección de tu dominio al nuevo túnel
           curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules/$RULE_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
@@ -67,18 +64,18 @@ jobs:
               "status": "active"
             }'
           
-          echo "🎉 TODO LISTO. Entra en: http://$MY_DOMAIN"
+          echo "🎉 SISTEMA ONLINE EN: http://$MY_DOMAIN"
 
-      - name: "3. Bucle Infinito (Relevo)"
+      - name: "3. Relevo Infinito"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Esperar 5 horas y 45 minutos
+          # Esperar 5 horas y 45 minutos (20700 segundos)
           sleep 20700
           
-          echo "⏰ Iniciando nueva sesión automática..."
-          # ⚠️ REEMPLAZA 'main.yml' POR EL NOMBRE DE TU ARCHIVO REAL
+          echo "⏰ Iniciando nueva sesión..."
+          # ⚠️ RECUERDA: El nombre del archivo debe ser 'main.yml' o el que tengas puesto
           gh workflow run "main.yml" --ref main
           
-          # Mantener viva esta sesión un poco más
+          # Margen de 10 min para que la nueva VPS tome el control
           sleep 600
