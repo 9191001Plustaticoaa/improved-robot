@@ -1,15 +1,12 @@
 name: VPS Profesional Permanente
 
 on:
-  workflow_dispatch:
-  workflow_run:
-    workflows: ["VPS Profesional Permanente"]
-    types: [completed]
+  workflow_dispatch: # Lo inicias tú la primera vez manualmente
 
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360 # Límite de 6 horas
 
     steps:
       - name: "1. Iniciar Webtop (14GB RAM)"
@@ -17,7 +14,8 @@ jobs:
           docker run -d -p 3000:3000 --name=webtop --security-opt seccomp=unconfined \
           -e PUID=1000 -e PGID=1000 -e TZ=America/Caracas --memory="14g" --shm-size="4gb" \
           lscr.io/linuxserver/webtop:ubuntu-xfce
-          sleep 5
+          echo "Webtop cargando..."
+          sleep 10
 
       - name: "2. Conexión Profesional Serveo"
         run: |
@@ -27,26 +25,29 @@ jobs:
 
           echo "Conectando dominio $TU_DOMINIO a la VPS..."
 
-          # Usamos un bucle por si la conexión SSH parpadea, que se reconecte sola
-          # -R 80:localhost:3000 pide a Serveo que use el puerto 80 (HTTP) para tu dominio
+          # Iniciamos el túnel en segundo plano
+          # -R pide a Serveo que asigne tu dominio al puerto 3000 local
           while true; do
             ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
                 -R ${TU_DOMINIO}:80:localhost:3000 serveo.net || sleep 5
           done &
 
           echo "✅ SISTEMA ONLINE en: http://$TU_DOMINIO"
-          echo "La barra de direcciones no cambiará. Es 100% profesional."
 
-      - name: "3. Mantener y Relevar"
+      - name: "3. Relevo Infinito"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Esperar 5 horas y 50 minutos
+          # Esperar 5 horas y 50 minutos (21000 segundos)
+          echo "La sesión está activa. Esperando al relevo..."
           sleep 21000
           
-          echo "⏰ Iniciando nueva sesión de relevo..."
-          # Reemplaza 'main.yml' por el nombre de este archivo si es diferente
+          echo "⏰ Iniciando nueva sesión para mantener el dominio vivo..."
+          
+          # IMPORTANTE: Cambia 'main.yml' por el nombre REAL de tu archivo
+          # Si tu archivo se llama 'vps.yml', pon 'vps.yml'
           gh workflow run "main.yml" --ref main
           
-          # Dar 5 minutos de margen para que la otra VPS tome el control
+          # Margen de 5 minutos antes de que esta máquina muera
           sleep 300
+          echo "Cerrando sesión antigua."
