@@ -1,79 +1,52 @@
-name: VPS Webtop - Totalmente Automatico
+name: VPS Profesional Permanente
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["VPS Profesional Permanente"]
+    types: [completed]
 
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 Horas
-    
-    steps:
-      - name: "1. Preparar Entorno"
-        uses: actions/checkout@v4
+    timeout-minutes: 360
 
-      - name: "2. Desplegar Webtop (14GB RAM)"
+    steps:
+      - name: "1. Iniciar Webtop (14GB RAM)"
         run: |
-          docker run -d \
-            --name=webtop \
-            --security-opt seccomp=unconfined \
-            -e PUID=1000 -e PGID=1000 \
-            -e TZ=America/Caracas \
-            -p 3000:3000 \
-            --memory="14g" \
-            --memory-swap="14g" \
-            --shm-size="4gb" \
-            lscr.io/linuxserver/webtop:ubuntu-xfce
+          docker run -d -p 3000:3000 --name=webtop --security-opt seccomp=unconfined \
+          -e PUID=1000 -e PGID=1000 -e TZ=America/Caracas --memory="14g" --shm-size="4gb" \
+          lscr.io/linuxserver/webtop:ubuntu-xfce
           sleep 5
 
-      - name: "3. Iniciar Tunel y Vincular Dominio"
-        env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-          DNS_NAME: ${{ secrets.DNS_RECORD_NAME }}
+      - name: "2. Conexión Profesional Serveo"
         run: |
-          echo "Conectando con tunel directo..."
-          
-          # Abrimos el tunel SSH con localhost.run
-          # Capturamos la salida para extraer el link generado
-          ssh -o StrictHostKeyChecking=no -R 80:localhost:3000 nokey@localhost.run > tunnel_log.txt 2>&1 &
-          
-          sleep 10
-          
-          # Extraemos la URL (ejemplo: tunel-raro.lhr.life)
-          TUNNEL_URL=$(grep -oE "[a-zA-Z0-9.-]+\.lhr\.life" tunnel_log.txt | head -n 1)
+          # --- CONFIGURACIÓN ---
+          TU_DOMINIO="Webtopt.qzz.io"
+          # ---------------------
 
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ Error: No se pudo obtener el link del tunel."
-            cat tunnel_log.txt
-            exit 1
-          fi
+          echo "Conectando dominio $TU_DOMINIO a la VPS..."
 
-          echo "✅ Link generado: $TUNNEL_URL"
+          # Usamos un bucle por si la conexión SSH parpadea, que se reconecte sola
+          # -R 80:localhost:3000 pide a Serveo que use el puerto 80 (HTTP) para tu dominio
+          while true; do
+            ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+                -R ${TU_DOMINIO}:80:localhost:3000 serveo.net || sleep 5
+          done &
 
-          # Actualizamos Cloudflare con el nuevo link
-          RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$DNS_NAME" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json" | jq -r '.result[0].id')
+          echo "✅ SISTEMA ONLINE en: http://$TU_DOMINIO"
+          echo "La barra de direcciones no cambiará. Es 100% profesional."
 
-          curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data '{"type":"CNAME","name":"'"$DNS_NAME"'","content":"'"$TUNNEL_URL"'","ttl":1,"proxied":false}'
-
-          echo "🎉 ¡LISTO! Acceso directo en: http://$DNS_NAME"
-
-      - name: "4. Mantener vivo (5h 50m)"
-        run: |
-          echo "VPS funcionando. Entra a tu dominio sin contraseñas."
-          # Espera casi las 6 horas
-          sleep 21000 
-
-      - name: "5. Reiniciar automaticamente"
-        if: always()
+      - name: "3. Mantener y Relevar"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "El tiempo se acaba, encendiendo la siguiente VPS..."
-          # CAMBIA 'nombre_de_este_archivo.yml' por el nombre real de tu archivo
-          gh workflow run "nombre_de_este_archivo.yml" --ref main
+          # Esperar 5 horas y 50 minutos
+          sleep 21000
+          
+          echo "⏰ Iniciando nueva sesión de relevo..."
+          # Reemplaza 'main.yml' por el nombre de este archivo si es diferente
+          gh workflow run "main.yml" --ref main
+          
+          # Dar 5 minutos de margen para que la otra VPS tome el control
+          sleep 300
