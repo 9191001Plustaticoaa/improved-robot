@@ -1,0 +1,93 @@
+name: Webtopt VPS - Auto DNS Loop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  vps-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 Horas máximo
+    
+    steps:
+      - name: "1. Checkout del código"
+        uses: actions/checkout@v4
+
+      - name: "2. Iniciar Webtop (14GB RAM)"
+        run: |
+          docker run -d \
+            --name=webtop \
+            --security-opt seccomp=unconfined \
+            -e PUID=1000 -e PGID=1000 \
+            -e TZ=America/Caracas \
+            -p 3000:3000 \
+            --memory="14g" \
+            --memory-swap="14g" \
+            --shm-size="4gb" \
+            lscr.io/linuxserver/webtop:ubuntu-xfce
+          
+          echo "Webtop arrancando..."
+          sleep 10
+
+      - name: "3. Túnel + Actualizar DNS (Webtopt.qzz.io)"
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          DNS_NAME: ${{ secrets.DNS_RECORD_NAME }} # Debe ser Webtopt.qzz.io
+        run: |
+          # 1. Instalar herramienta de Cloudflare
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+          # 2. Iniciar túnel aleatorio (GRATIS sin tarjeta)
+          # Esto genera una URL tipo 'random-name.trycloudflare.com'
+          cloudflared tunnel --url http://localhost:3000 > tunnel.log 2>&1 &
+          
+          echo "Generando túnel... espera 15 segundos..."
+          sleep 15
+          
+          # 3. Extraer la URL generada del log
+          TUNNEL_URL=$(grep -o 'https://.*trycloudflare.com' tunnel.log | head -n 1 | sed 's/https:\/\///')
+          
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ ERROR: No se generó la URL del túnel. Revisa los logs."
+            cat tunnel.log
+            exit 1
+          fi
+          
+          echo "✅ Túnel temporal: $TUNNEL_URL"
+          echo "🔄 Actualizando $DNS_NAME en Cloudflare..."
+
+          # 4. Buscar el ID del registro DNS que creaste (Webtopt)
+          RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$DNS_NAME" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+          if [ "$RECORD_ID" == "null" ] || [ -z "$RECORD_ID" ]; then
+             echo "❌ ERROR: No encontré el registro $DNS_NAME en Cloudflare."
+             echo "Asegúrate de haber creado el CNAME 'Webtopt' apuntando a google.com primero."
+             exit 1
+          fi
+
+          # 5. Actualizar el registro para que apunte al túnel
+          UPDATE_CMD=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"CNAME","name":"'"$DNS_NAME"'","content":"'"$TUNNEL_URL"'","ttl":1,"proxied":false}')
+            
+          echo "✅ ¡LISTO! Tu VPS está en: http://$DNS_NAME"
+          echo "(Puede tardar 1 minuto en propagarse la primera vez)"
+
+      - name: "4. Mantener Vivo (5h 50min)"
+        run: |
+          echo "Sesión activa. El sistema se reiniciará automáticamente antes del límite."
+          sleep 21000 
+
+      - name: "5. Bucle Infinito (Reiniciar)"
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⏳ Tiempo agotado. Lanzando nueva máquina..."
+          # ⚠️ REEMPLAZA 'main.yml' POR EL NOMBRE REAL DE TU ARCHIVO .YML
+          gh workflow run "main.yml" --ref main
+          echo "Nueva sesión solicitada. Apagando..."
