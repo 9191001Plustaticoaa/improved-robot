@@ -1,0 +1,84 @@
+name: VPS Profesional Permanente
+
+on:
+  workflow_dispatch:
+
+jobs:
+  vps-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: "1. Iniciar Webtop (14GB RAM)"
+        run: |
+          docker run -d -p 3000:3000 --name=webtop --security-opt seccomp=unconfined \
+          -e PUID=1000 -e PGID=1000 -e TZ=America/Caracas --memory="14g" --shm-size="4gb" \
+          lscr.io/linuxserver/webtop:ubuntu-xfce
+          echo "Webtop arrancando..."
+          sleep 10
+
+      - name: "2. Tunel + Actualizar Cloudflare (Fix 1034)"
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          MY_DOMAIN: "Webtopt.qzz.io"
+        run: |
+          # 1. Iniciar túnel con Pinggy
+          ssh -o StrictHostKeyChecking=no -R 80:localhost:3000 a.pinggy.io > tunnel.log 2>&1 &
+          
+          echo "Esperando enlace del túnel..."
+          sleep 25 # Damos un poco más de tiempo
+          
+          # 2. Extraer el link generado
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9.-]+\.pinggy\.link" tunnel.log | head -n 1)
+          
+          if [ -z "$TUNNEL_URL" ]; then
+             echo "❌ Error al obtener el link. Reintentando..."
+             sleep 10
+             TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9.-]+\.pinggy\.link" tunnel.log | head -n 1)
+          fi
+
+          if [ -z "$TUNNEL_URL" ]; then
+             echo "❌ No se pudo conectar al túnel."
+             cat tunnel.log
+             exit 1
+          fi
+
+          echo "✅ Link generado: $TUNNEL_URL"
+
+          # 3. Buscar el ID de la Page Rule en Cloudflare
+          RULE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            | jq -r --arg DOMAIN "$MY_DOMAIN/*" '.result[] | select(.targets[0].constraint.value == $DOMAIN) | .id')
+
+          if [ -z "$RULE_ID" ] || [ "$RULE_ID" == "null" ]; then
+            echo "❌ ERROR: No se encontró la Page Rule para $MY_DOMAIN/*"
+            exit 1
+          fi
+
+          # 4. Actualizar la redirección (Page Rule)
+          curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules/$RULE_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{
+              "targets": [{"target": "url", "constraint": {"operator": "matches", "value": "'"$MY_DOMAIN"'/*"}}],
+              "actions": [{"id": "forwarding_url", "value": {"url": "'"$TUNNEL_URL"'", "status_code": 302}}],
+              "status": "active"
+            }'
+          
+          echo "🎉 TODO LISTO. Entra en: http://$MY_DOMAIN"
+
+      - name: "3. Bucle Infinito (Relevo)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Esperar 5 horas y 45 minutos
+          sleep 20700
+          
+          echo "⏰ Iniciando nueva sesión automática..."
+          # ⚠️ REEMPLAZA 'main.yml' POR EL NOMBRE DE TU ARCHIVO REAL
+          gh workflow run "main.yml" --ref main
+          
+          # Mantener viva esta sesión un poco más
+          sleep 600
