@@ -14,7 +14,6 @@ jobs:
           docker run -d -p 3000:3000 --name=webtop --security-opt seccomp=unconfined \
           -e PUID=1000 -e PGID=1000 -e TZ=America/Caracas --memory="14g" --shm-size="4gb" \
           lscr.io/linuxserver/webtop:ubuntu-xfce
-          echo "Webtop iniciando..."
           sleep 10
 
       - name: "2. Iniciar Túnel y Actualizar Redirección"
@@ -27,55 +26,51 @@ jobs:
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-          # 2. Iniciar túnel aleatorio y guardar log
+          # 2. Iniciar túnel
           cloudflared tunnel --url http://localhost:3000 > tunnel.log 2>&1 &
-          
-          echo "Generando túnel de Cloudflare..."
           sleep 20
           
-          # 3. Extraer la URL de trycloudflare.com
+          # 3. Extraer URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9.-]+\.trycloudflare\.com" tunnel.log | head -n 1)
+          if [ -z "$TUNNEL_URL" ]; then echo "❌ No se obtuvo URL"; exit 1; fi
+          echo "✅ Túnel: $TUNNEL_URL"
 
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ No se pudo obtener la URL de Cloudflare."
-            cat tunnel.log
+          # 4. Obtener lista de Page Rules (Con debug)
+          echo "🔍 Consultando Page Rules en Cloudflare..."
+          RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+
+          # Si la respuesta no es exitosa, mostrar el error real de Cloudflare
+          if [[ $(echo $RESPONSE | jq -r '.success') != "true" ]]; then
+            echo "❌ ERROR DE API CLOUDFLARE:"
+            echo $RESPONSE | jq '.errors'
             exit 1
           fi
-          echo "✅ Túnel detectado: $TUNNEL_URL"
 
-          # 4. Buscar el ID de la Page Rule en tu cuenta
-          RULE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            | jq -r --arg DOMAIN "$MY_DOMAIN/*" '.result[] | select(.targets[0].constraint.value == $DOMAIN) | .id')
+          # 5. Buscar ID de la regla para Webtopt.qzz.io/*
+          RULE_ID=$(echo $RESPONSE | jq -r --arg TARGET "$MY_DOMAIN/*" '.result[] | select(.targets[0].constraint.value == $TARGET) | .id')
 
           if [ -z "$RULE_ID" ] || [ "$RULE_ID" == "null" ]; then
-            echo "❌ ERROR: No se encontró la Page Rule para $MY_DOMAIN/*"
+            echo "❌ ERROR: No encontré la Page Rule para $MY_DOMAIN/*"
+            echo "Asegúrate de que la regla existe exactamente con ese nombre en el panel."
             exit 1
           fi
+          echo "✅ ID de Regla: $RULE_ID"
 
-          # 5. Actualizar la redirección de tu dominio al nuevo túnel
+          # 6. Actualizar la regla
           curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules/$RULE_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data '{
-              "targets": [{"target": "url", "constraint": {"operator": "matches", "value": "'"$MY_DOMAIN"'/*"}}],
-              "actions": [{"id": "forwarding_url", "value": {"url": "'"$TUNNEL_URL"'", "status_code": 302}}],
-              "status": "active"
-            }'
+            --data '{"targets":[{"target":"url","constraint":{"operator":"matches","value":"'"$MY_DOMAIN"'/*"}}],"actions":[{"id":"forwarding_url","value":{"url":"'"$TUNNEL_URL"'","status_code":302}}],"status":"active"}'
           
-          echo "🎉 SISTEMA ONLINE EN: http://$MY_DOMAIN"
+          echo "🎉 SISTEMA ONLINE: http://$MY_DOMAIN"
 
-      - name: "3. Relevo Infinito"
+      - name: "3. Relevo"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Esperar 5 horas y 45 minutos (20700 segundos)
           sleep 20700
-          
-          echo "⏰ Iniciando nueva sesión..."
-          # ⚠️ RECUERDA: El nombre del archivo debe ser 'main.yml' o el que tengas puesto
+          # Asegúrate que el nombre de abajo coincida con tu archivo .yml
           gh workflow run "main.yml" --ref main
-          
-          # Margen de 10 min para que la nueva VPS tome el control
           sleep 600
