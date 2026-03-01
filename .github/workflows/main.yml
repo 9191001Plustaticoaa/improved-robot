@@ -1,4 +1,4 @@
-name: VPS Webtop - DNS Auto-Update (No 1014)
+name: VPS Webtop - Totalmente Automatico
 
 on:
   workflow_dispatch:
@@ -12,10 +12,7 @@ jobs:
       - name: "1. Preparar Entorno"
         uses: actions/checkout@v4
 
-      - name: "2. Instalar Localtunnel"
-        run: sudo npm install -g localtunnel
-
-      - name: "3. Desplegar Webtop (14GB RAM)"
+      - name: "2. Desplegar Webtop (14GB RAM)"
         run: |
           docker run -d \
             --name=webtop \
@@ -27,64 +24,56 @@ jobs:
             --memory-swap="14g" \
             --shm-size="4gb" \
             lscr.io/linuxserver/webtop:ubuntu-xfce
-          sleep 10
+          sleep 5
 
-      - name: "4. Generar Túnel + Actualizar Cloudflare"
+      - name: "3. Iniciar Tunel y Vincular Dominio"
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
           DNS_NAME: ${{ secrets.DNS_RECORD_NAME }}
         run: |
-          # 1. Iniciar localtunnel y guardar el link en un archivo
-          lt --port 3000 > tunnel_info.txt 2>&1 &
+          echo "Conectando con tunel directo..."
           
-          echo "Esperando link de Localtunnel..."
+          # Abrimos el tunel SSH con localhost.run
+          # Capturamos la salida para extraer el link generado
+          ssh -o StrictHostKeyChecking=no -R 80:localhost:3000 nokey@localhost.run > tunnel_log.txt 2>&1 &
+          
           sleep 10
           
-          # 2. Extraer la URL (ejemplo: https://heavy-cars-run.loca.lt)
-          # Limpiamos el texto para dejar solo el dominio sin https://
-          RAW_URL=$(grep -o 'https://[^ ]*' tunnel_info.txt | head -n 1)
-          CLEAN_URL=$(echo $RAW_URL | sed 's/https:\/\///')
+          # Extraemos la URL (ejemplo: tunel-raro.lhr.life)
+          TUNNEL_URL=$(grep -oE "[a-zA-Z0-9.-]+\.lhr\.life" tunnel_log.txt | head -n 1)
 
-          if [ -z "$CLEAN_URL" ]; then
-            echo "❌ Error: No se pudo obtener el link de Localtunnel."
-            cat tunnel_info.txt
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Error: No se pudo obtener el link del tunel."
+            cat tunnel_log.txt
             exit 1
           fi
 
-          echo "✅ Nuevo link detectado: $CLEAN_URL"
+          echo "✅ Link generado: $TUNNEL_URL"
 
-          # 3. Buscar el ID del registro DNS Webtopt.qzz.io en Cloudflare
+          # Actualizamos Cloudflare con el nuevo link
           RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$DNS_NAME" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" | jq -r '.result[0].id')
 
-          if [ "$RECORD_ID" == "null" ]; then
-            echo "❌ Error: El registro $DNS_NAME no existe en Cloudflare. Créalo manualmente primero."
-            exit 1
-          fi
-
-          # 4. Actualizar el CNAME de Cloudflare para que apunte al nuevo link de Localtunnel
-          # Usamos proxied: false (nube gris) para que funcione directo y rápido
           curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data '{"type":"CNAME","name":"'"$DNS_NAME"'","content":"'"$CLEAN_URL"'","ttl":1,"proxied":false}'
+            --data '{"type":"CNAME","name":"'"$DNS_NAME"'","content":"'"$TUNNEL_URL"'","ttl":1,"proxied":false}'
 
-          echo ""
-          echo "🎉 ¡LISTO! Tu dominio $DNS_NAME ahora apunta a $CLEAN_URL"
-          echo "🌍 Entra en: http://$DNS_NAME"
+          echo "🎉 ¡LISTO! Acceso directo en: http://$DNS_NAME"
 
-      - name: "5. Mantener Vivo (Bucle)"
+      - name: "4. Mantener vivo (5h 50m)"
         run: |
-          echo "Sesión activa por 5h 50m."
+          echo "VPS funcionando. Entra a tu dominio sin contraseñas."
+          # Espera casi las 6 horas
           sleep 21000 
 
-      - name: "6. Reiniciar (Loop Infinito)"
+      - name: "5. Reiniciar automaticamente"
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Tiempo agotado. Lanzando nueva sesión..."
-          # Reemplaza 'main.yml' por el nombre de tu archivo .yml
-          gh workflow run "main.yml" --ref main
+          echo "El tiempo se acaba, encendiendo la siguiente VPS..."
+          # CAMBIA 'nombre_de_este_archivo.yml' por el nombre real de tu archivo
+          gh workflow run "nombre_de_este_archivo.yml" --ref main
